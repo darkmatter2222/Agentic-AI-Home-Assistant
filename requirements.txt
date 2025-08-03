@@ -1,3 +1,20 @@
+# Base requirements for Niko Home Assistant
 semantic-kernel
 python-dotenv
 openai
+aiofiles
+
+# Local model support - CUDA GPU optimized (choose one set)
+# For NVIDIA GPU with CUDA:
+# torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu121
+# transformers>=4.40.0
+# accelerate>=0.20.0
+# safetensors>=0.3.1
+# bitsandbytes>=0.41.0
+# flash-attn>=2.5.0 (optional, for better GPU performance)
+
+# For CPU only:
+# torch>=2.0.0 --index-url https://download.pytorch.org/whl/cpu
+# transformers>=4.40.0
+# accelerate>=0.20.0
+# safetensors>=0.3.1
