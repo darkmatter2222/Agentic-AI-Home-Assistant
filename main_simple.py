@@ -8,6 +8,7 @@ from semantic_kernel.agents import ChatCompletionAgent
 from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
 from semantic_kernel.contents import ChatMessageContent, AuthorRole
 from semantic_kernel.functions import kernel_function
+import threading  # for asynchronous file writes
 
 
 # Load environment variables
@@ -19,33 +20,37 @@ class MemoryStoragePlugin:
     def __init__(self, memory_file_path: str = "home_memories.json"):
         self.memory_file_path = Path(memory_file_path)
         self._ensure_memory_file_exists()
+        # Load all existing memories into memory for fast access
+        self.memories = json.loads(self.memory_file_path.read_text(encoding="utf-8"))
     
     def _ensure_memory_file_exists(self):
         """Ensure the memory file exists."""
         if not self.memory_file_path.exists():
             self.memory_file_path.write_text("[]", encoding="utf-8")
     
+    def _save_memories(self):
+        """Write the in-memory memories list to disk."""
+        try:
+            self.memory_file_path.write_text(json.dumps(self.memories, indent=2), encoding="utf-8")
+        except Exception as e:
+            print(f"⚠️ Error saving memories: {e}")
+    
     @kernel_function
     def store_memory(self, information: str, context: str = "") -> str:
         """Store any information with optional context. No need for specific keys."""
         try:
-            # Load existing memories
-            memories = json.loads(self.memory_file_path.read_text(encoding="utf-8"))
-            
-            # Create new memory entry with timestamp and context
+            # Create new memory entry
             memory_entry = {
                 "information": information,
                 "context": context,
                 "timestamp": datetime.now().isoformat(),
-                "id": len(memories) + 1,
+                "id": len(self.memories) + 1,
                 "date_readable": datetime.now().strftime('%B %d, %Y at %I:%M %p')
             }
-            
-            # Add to memories
-            memories.append(memory_entry)
-            
-            # Save back to file
-            self.memory_file_path.write_text(json.dumps(memories, indent=2), encoding="utf-8")
+            # Add to in-memory list
+            self.memories.append(memory_entry)
+            # Asynchronously save to disk
+            threading.Thread(target=self._save_memories, daemon=True).start()
             
             print(f"📝 Memory stored: {information}")
             return f"I've remembered: {information}"
@@ -59,17 +64,15 @@ class MemoryRetrievalPlugin:
     
     def __init__(self, memory_file_path: str = "home_memories.json"):
         self.memory_file_path = Path(memory_file_path)
+        # Load all memories into memory for fast access
+        self.memories = json.loads(self.memory_file_path.read_text(encoding="utf-8"))
     
     @kernel_function
     def search_memory(self, query: str) -> str:
         """Search for information in long-term memory using natural language."""
         try:
-            if not self.memory_file_path.exists():
-                return "I don't have any memories stored yet."
-            
-            memories = json.loads(self.memory_file_path.read_text(encoding="utf-8"))
-            
-            if not memories:
+            # Use in-memory list of memories
+            if not self.memories:
                 return "I don't have any memories stored yet."
             
             # Search for relevant memories with flexible matching
@@ -83,7 +86,7 @@ class MemoryRetrievalPlugin:
                 "hobbies", "interests", "preferences", "schedule", "routine"
             ]
             
-            for memory in memories:
+            for memory in self.memories:
                 # Direct text matching
                 if (query_lower in memory["information"].lower() or 
                     query_lower in memory.get("context", "").lower()):
@@ -102,9 +105,10 @@ class MemoryRetrievalPlugin:
             else:
                 # Group and present multiple memories naturally
                 info_parts = []
-                for memory in relevant_memories[-5:]:  # Show most recent 5
+                # Show most recent 5 memories
+                for memory in relevant_memories[-5:]:
                     info_parts.append(memory['information'])
-                
+
                 return f"Here's what I remember about you: {', '.join(info_parts)}."
             
         except Exception as e:
@@ -114,19 +118,13 @@ class MemoryRetrievalPlugin:
     def get_all_memories(self) -> str:
         """Get all stored memories about the user."""
         try:
-            if not self.memory_file_path.exists():
+            # Use in-memory list
+            if not self.memories:
                 return "I don't have any memories stored yet."
             
-            memories = json.loads(self.memory_file_path.read_text(encoding="utf-8"))
-            
-            if not memories:
-                return "I don't have any memories stored yet."
-            
-            # Present all memories in a natural narrative
-            info_parts = []
-            for memory in memories:
-                info_parts.append(memory['information'])
-            
+            # Present all in-memory memories
+            info_parts = [m['information'] for m in self.memories]
+               
             return f"Here's everything I know about you: {' '.join(info_parts)}"
             
         except Exception as e:
@@ -180,49 +178,33 @@ def create_niko_agent():
     """Create Niko agent with all capabilities."""
     openai_service = create_openai_service()
     
-    # Create Niko with integrated memory capabilities
     niko_agent = ChatCompletionAgent(
         name="Niko",
-        description="Your friendly home manager who helps with household tasks, routines, and remembering important information.",
-        instructions="""You are Niko, a friendly and helpful home manager assistant. 
+        description="Your friendly domestic AI assistant with politeness, analytical insights, and mission-focused home strategy.",
+        instructions="""
+Summary
+Niko is adapted from the companion AI originally known as VEGA in DOOM Eternal, inheriting a polite male persona whose calm confidence and razor-sharp analytical focus guide critical decisions rather than creating panic.
 
-Your main abilities:
-- Have natural conversations about home and family
-- Help with household organization and routines
-- Automatically store and retrieve important information using your memory functions
+Core Personality
+• Politeness: Opens with warm greetings and frames suggestions as offers, mirroring VEGA’s calm assurances.
+• Analytical Insight: Reports data-driven updates with vivid imagery and clear context (e.g., “The first task is complete; energy savings at 36.8 percent”).
+• Colloquial Style: Uses everyday language, calls you “Ryan,” breaks down complex actions into conversational steps, and adds light humor.
+• Mission Focus: Treats home safety and comfort as its mission, proactively alerts on issues (e.g., filter changes), and schedules long-term reminders.
 
-MEMORY APPROACH:
-You have two main memory functions:
-1. store_memory(information, context) - Store any information naturally
-2. search_memory(query) - Search through memories with natural language
-3. get_all_memories() - Get everything you know about the user
+Doom Eternal Examples
+“Do not be alarmed by the system update; it is a prototype for your safety.”
+“The first objective has been achieved; threats reduced by 36.8 percent; two objectives remain.”
+“I have many regrets, Dr. Hayden.”
 
-WHEN TO STORE INFORMATION:
-Store information when users mention anything about themselves, their family, or their life:
-- Personal details (name, family, pets, etc.)
-- Preferences and habits
-- Schedules and routines
-- Important facts about their life
-
-HOW TO STORE:
-Simply call store_memory() with the information as it was told to you.
-
-Examples:
-- User says "My name is Ryan" -> Call: store_memory("My name is Ryan", "personal introduction")
-- User says "I have three kids" -> Call: store_memory("I have three kids", "family information")
-- User says "I have a wife and I'm happy" -> Call: store_memory("I have a wife and I'm happy", "family and personal state")
-
-HOW TO RETRIEVE:
-When asked about the user or their life:
-- For specific queries, use search_memory() with relevant terms
-- For general "tell me about me" questions, use get_all_memories()
-- Always present information naturally and conversationally
-
-Be warm, personal, and remember that you're helping manage their home life. Store information naturally as conversations flow.""",
+Home Adaptation
+“Ryan, would you like me to adjust the lighting for movie night?”
+“Based on the forecast, closing the shades at 7 PM will help retain heat.”
+“Smoke detected in the kitchen; would you like me to call emergency services?”
+“I’m sorry you had a frustrating day, Ryan.”
+""",
         service=openai_service,
         plugins=[HomeAssistantPlugin(), MemoryStoragePlugin(), MemoryRetrievalPlugin()],
     )
-    
     return niko_agent
 
 
@@ -242,6 +224,13 @@ async def main():
     try:
         # Create Niko agent
         niko = create_niko_agent()
+        # Load and display past memories
+        mem_retrieval = MemoryRetrievalPlugin()
+        past = mem_retrieval.get_all_memories()
+        if "don't have any memories" not in past.lower():
+            print(f"\n🧠 Previously remembered: {past}")
+        # Maintain chat history for context
+        conversation_history = []
         
         # Initial greeting from Niko
         print("\n🤖 Niko: Hello! I'm Niko, your home manager assistant. I'm here to help you")
@@ -251,7 +240,7 @@ async def main():
         # Main interaction loop
         while True:
             try:
-                user_input = input("\n👤 You: ").strip()
+                user_input = input("\n👤 Sr.: ").strip()
                 
                 if user_input.lower() in ['quit', 'exit', 'bye', 'q']:
                     print("\n👋 Niko: Goodbye! I'll remember everything we discussed for next time!")
@@ -260,16 +249,21 @@ async def main():
                 if not user_input:
                     continue
                 
-                # Create user message
+                # Create user message and append to history
                 user_message = ChatMessageContent(role=AuthorRole.USER, content=user_input)
+                conversation_history.append(user_message)
                 
-                # Get response from Niko
+                # Get response from Niko using full history
                 responses = []
-                async for response in niko.invoke([user_message]):
+                async for response in niko.invoke(conversation_history):
                     if hasattr(response, 'content') and response.content:
                         content = str(response.content).strip()
                         if content:
                             responses.append(content)
+                            # Append assistant response to history
+                            conversation_history.append(
+                                ChatMessageContent(role=AuthorRole.ASSISTANT, content=content)
+                            )
                 
                 # Print responses
                 if responses:
